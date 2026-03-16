@@ -129,60 +129,80 @@ export default function App() {
       .sort((a, b) => a.datum.localeCompare(b.datum));
     const monatsname = MONATE[parseInt(mon, 10) - 1];
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-    <title>QM Kühlraum ${monatsname} ${year}</title>
-    <style>
-      body { font-family: 'Courier New', monospace; max-width: 960px; margin: 0 auto; padding: 32px; color: #000; font-size: 12px; }
-      h1 { font-size: 18px; margin: 0; }
-      .sub { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #555; margin-bottom: 4px; }
-      .header { border-bottom: 3px solid #000; padding-bottom: 12px; margin-bottom: 24px; }
-      table { width: 100%; border-collapse: collapse; }
-      th { background: #1a1a2e; color: #fff; padding: 8px 10px; text-align: left; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
-      td { padding: 8px 10px; border-bottom: 1px solid #eee; vertical-align: top; font-size: 11px; }
-      tr:nth-child(even) td { background: #f9f9f7; }
-      .ok   { color: #2e7d32; font-weight: bold; }
-      .warn { color: #c62828; font-weight: bold; }
-      .footer { border-top: 1px solid #ccc; padding-top: 12px; margin-top: 24px; font-size: 10px; color: #888; display: flex; justify-content: space-between; }
-      @media print { body { padding: 16px; } }
-    </style></head><body>
-    <div class="header">
-      <div class="sub">Bestattungshaus Kallwaß — QM-Dokumentation</div>
-      <h1>Kühlraum-Kontrollbuch</h1>
-      <div style="font-size:13px;margin-top:6px;font-weight:bold;">${monatsname} ${year}</div>
-      <div style="font-size:11px;color:#555;margin-top:2px;">${filtered.length} Einträge</div>
-    </div>
-    ${filtered.length === 0
-      ? '<p style="color:#999;text-align:center;padding:40px 0;">Keine Einträge für diesen Monat.</p>'
-      : `<table>
-      <thead><tr>
-        <th>Datum</th><th>Zeit</th><th>Temp.</th><th>Fahrzeug</th>
-        <th>Überf.trage</th><th>Auto</th><th>Kühlraum</th><th>Hygiene</th>
-        <th>Bemerkung</th><th>Kürzel</th>
-      </tr></thead>
-      <tbody>
-        ${filtered.map(e => {
-          const tHigh = parseFloat(e.temperatur) > 6;
-          const c = e.checks || {};
-          return `<tr>
-            <td>${formatDate(e.datum)}</td>
-            <td>${e.uhrzeit} Uhr</td>
-            <td class="${tHigh ? "warn" : "ok"}">${e.temperatur} °C${tHigh ? " ⚠" : ""}</td>
-            <td>${(e.autos && e.autos.length > 0 ? e.autos.join(", ") : e.auto) || "—"}</td>
-            <td class="${c.trage_desinfiziert ? "ok" : "warn"}">${c.trage_desinfiziert ? "☑" : "☐"}</td>
-            <td class="${c.auto_gereinigt ? "ok" : "warn"}">${c.auto_gereinigt ? "☑" : "☐"}</td>
-            <td class="${c.kuehlraum_desinfiziert ? "ok" : "warn"}">${c.kuehlraum_desinfiziert ? "☑" : "☐"}</td>
-            <td class="${c.hygieneraum_desinfiziert ? "ok" : "warn"}">${c.hygieneraum_desinfiziert ? "☑" : "☐"}</td>
-            <td>${e.bemerkung || "—"}</td>
-            <td style="font-weight:bold;">${e.kuerzel}</td>
-          </tr>`;
-        }).join("")}
-      </tbody></table>`
-    }
-    <div class="footer">
-      <span>Bestattungshaus Kallwaß · Kühlraum-Kontrollbuch ${monatsname} ${year}</span>
-      <span>Erstellt: ${new Date().toLocaleDateString("de-DE")}</span>
-    </div>
-    </body></html>`;
+    const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>QM Kühlraum \${monatsname} \${year}</title>
+<style>
+  @page { size: A4; margin: 20mm; }
+  body { font-family: Arial, Helvetica, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; color: #000; font-size: 13px; }
+  .header { border-bottom: 3px solid #1a1a2e; padding-bottom: 12px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-end; }
+  .header-left .sub { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: #888; margin-bottom: 4px; }
+  .header-left h1 { font-size: 20px; margin: 0; color: #1a1a2e; }
+  .header-left .monat { font-size: 14px; font-weight: bold; margin-top: 4px; }
+  .header-right { font-size: 11px; color: #888; text-align: right; }
+  .eintrag { border: 1px solid #ddd; border-radius: 6px; margin-bottom: 12px; overflow: hidden; page-break-inside: avoid; }
+  .eintrag-header { background: #f4f5f0; padding: 8px 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; }
+  .eintrag-datum { font-weight: bold; font-size: 14px; }
+  .eintrag-meta { font-size: 12px; color: #555; }
+  .eintrag-temp { font-size: 13px; font-weight: bold; }
+  .temp-ok { color: #2e7d32; }
+  .temp-warn { color: #c62828; }
+  .eintrag-body { padding: 10px 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; }
+  .check-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 3px 0; }
+  .check-ok   { color: #2e7d32; font-size: 16px; line-height: 1; }
+  .check-warn { color: #ddd;    font-size: 16px; line-height: 1; }
+  .eintrag-footer { background: #fafaf9; border-top: 1px solid #eee; padding: 6px 14px; display: flex; justify-content: space-between; font-size: 11px; color: #777; }
+  .kuerzel { font-weight: bold; color: #1a1a2e; font-size: 13px; }
+  .fahrzeug { display: inline-block; background: #e8eaf6; color: #3949ab; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: bold; }
+  .footer { border-top: 1px solid #ccc; padding-top: 10px; margin-top: 20px; font-size: 10px; color: #aaa; display: flex; justify-content: space-between; }
+  @media print { body { padding: 0; } }
+</style>
+</head><body>
+<div class="header">
+  <div class="header-left">
+    <div class="sub">Bestattungshaus Kallwaß — QM-Dokumentation</div>
+    <h1>Kühlraum-Kontrollbuch</h1>
+    <div class="monat">\${monatsname} \${year} · \${filtered.length} Einträge</div>
+  </div>
+  <div class="header-right">Erstellt: \${new Date().toLocaleDateString("de-DE")}</div>
+</div>
+
+\${filtered.length === 0
+  ? '<p style="color:#999;text-align:center;padding:40px 0;">Keine Einträge für diesen Monat.</p>'
+  : filtered.map(e => {
+      const tHigh = parseFloat(e.temperatur) > 6;
+      const c = e.checks || {};
+      const fahrzeug = (e.autos && e.autos.length > 0 ? e.autos.join(", ") : e.auto) || null;
+      const chk = (ok, label) => \`<div class="check-row"><span class="\${ok ? 'check-ok' : 'check-warn'}">\${ok ? '✓' : '✗'}</span><span style="color:\${ok ? '#000' : '#aaa'}">\${label}</span></div>\`;
+      return \`
+      <div class="eintrag">
+        <div class="eintrag-header">
+          <div>
+            <span class="eintrag-datum">\${formatDate(e.datum)}</span>
+            <span class="eintrag-meta" style="margin-left:12px;">\${e.uhrzeit} Uhr</span>
+            \${fahrzeug ? \`<span class="fahrzeug" style="margin-left:10px;">\${fahrzeug}</span>\` : ''}
+          </div>
+          <span class="eintrag-temp \${tHigh ? 'temp-warn' : 'temp-ok'}">\${e.temperatur} °C\${tHigh ? ' ⚠' : ''}</span>
+        </div>
+        <div class="eintrag-body">
+          \${chk(c.trage_desinfiziert, 'Überführungstrage desinfiziert')}
+          \${chk(c.kuehlraum_desinfiziert, 'Kühlraum kontrolliert und desinfiziert')}
+          \${chk(c.auto_gereinigt, 'Auto gereinigt')}
+          \${chk(c.hygieneraum_desinfiziert, 'Hygieneraum desinfizieren')}
+        </div>
+        <div class="eintrag-footer">
+          <span>\${e.bemerkung ? '📝 ' + e.bemerkung : ''}</span>
+          <span class="kuerzel">\${e.kuerzel}</span>
+        </div>
+      </div>\`;
+    }).join("")
+}
+<div class="footer">
+  <span>Bestattungshaus Kallwaß · Kühlraum-Kontrollbuch \${monatsname} \${year}</span>
+  <span>Erstellt: \${new Date().toLocaleDateString("de-DE")}</span>
+</div>
+</body></html>`;
 
     const w = window.open("", "_blank");
     w.document.write(html);
