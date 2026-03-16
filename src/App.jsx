@@ -7,6 +7,8 @@ import {
   query,
   orderBy,
   serverTimestamp,
+  deleteDoc,
+  doc as fsDoc,
 } from "firebase/firestore";
 
 // ─── Konstanten ─────────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ function emptyForm() {
     datum:    today(),
     uhrzeit:  nowTime(),
     checks:   { trage_desinfiziert: false, auto_gereinigt: false, kuehlraum_desinfiziert: false, hygieneraum_desinfiziert: false },
-    auto:     "",
+    autos:    [],
     temperatur: "4.5",
     kuerzel:  "",
     bemerkung: "",
@@ -109,6 +111,16 @@ export default function App() {
 
   function openPrint(entry) { setPrintEntry(entry); setView("print"); }
 
+  async function deleteEintrag(id) {
+    if (!window.confirm("Eintrag wirklich löschen?")) return;
+    try {
+      await deleteDoc(fsDoc(db, "eintraege", id));
+      setEintraege(prev => prev.filter(e => e.id !== id));
+    } catch (e) {
+      alert("Fehler beim Löschen: " + e.message);
+    }
+  }
+
   // Monatsexport
   function printMonat() {
     const [year, mon] = exportMonat.split("-");
@@ -155,7 +167,7 @@ export default function App() {
             <td>${formatDate(e.datum)}</td>
             <td>${e.uhrzeit} Uhr</td>
             <td class="${tHigh ? "warn" : "ok"}">${e.temperatur} °C${tHigh ? " ⚠" : ""}</td>
-            <td>${e.auto || "—"}</td>
+            <td>${(e.autos && e.autos.length > 0 ? e.autos.join(", ") : e.auto) || "—"}</td>
             <td class="${c.trage_desinfiziert ? "ok" : "warn"}">${c.trage_desinfiziert ? "☑" : "☐"}</td>
             <td class="${c.auto_gereinigt ? "ok" : "warn"}">${c.auto_gereinigt ? "☑" : "☐"}</td>
             <td class="${c.kuehlraum_desinfiziert ? "ok" : "warn"}">${c.kuehlraum_desinfiziert ? "☑" : "☐"}</td>
@@ -218,7 +230,7 @@ export default function App() {
                 {printEntry.temperatur} °C {pTempHigh ? "⚠ ÜBER 6 °C!" : ""}
               </td>
             </tr>
-            {printEntry.auto && <tr><td style={{ padding: "6px 0", fontWeight: "bold" }}>Fahrzeug</td><td>{printEntry.auto}</td></tr>}
+            {((printEntry.autos && printEntry.autos.length > 0) || printEntry.auto) && <tr><td style={{ padding: "6px 0", fontWeight: "bold" }}>Fahrzeug</td><td>{printEntry.autos && printEntry.autos.length > 0 ? printEntry.autos.join(", ") : printEntry.auto}</td></tr>}
           </tbody>
         </table>
         <div style={{ border: "1px solid #ccc", borderRadius: 4, overflow: "hidden", marginBottom: 20 }}>
@@ -301,7 +313,7 @@ export default function App() {
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 14, fontWeight: "bold", color: "#1a1a2e" }}>{formatDate(e.datum)}</span>
                       <span style={{ fontSize: 12, color: "#999" }}>{e.uhrzeit} Uhr</span>
-                      {e.auto && <span style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: "#e8eaf6", color: "#3949ab", fontWeight: "bold" }}>{e.auto}</span>}
+                      {(e.autos && e.autos.length > 0 ? e.autos : e.auto ? [e.auto] : []).map(a => <span key={a} style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: "#e8eaf6", color: "#3949ab", fontWeight: "bold" }}>{ a }</span>)}
                       <span style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: allOk ? "#e8f5e9" : "#fce4ec", color: allOk ? "#2e7d32" : "#c62828", fontWeight: "bold" }}>
                         {allOk ? "✓ OK" : "⚠ Unvollständig"}
                       </span>
@@ -311,7 +323,7 @@ export default function App() {
                       <span style={{ marginLeft: 12, color: "#888" }}>| {e.kuerzel}</span>
                     </div>
                   </div>
-                  <button onClick={() => openPrint(e)} style={{ padding: "7px 14px", background: "#f0f0f0", color: "#333", border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", fontSize: 12, marginLeft: 8, flexShrink: 0 }}>🖨</button>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}><button onClick={() => openPrint(e)} style={{ padding: "7px 14px", background: "#f0f0f0", color: "#333", border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>🖨</button><button onClick={() => deleteEintrag(e.id)} style={{ padding: "7px 14px", background: "#fce4ec", color: "#c62828", border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>🗑</button></div>
                 </div>
               );
             })}
@@ -351,8 +363,8 @@ export default function App() {
                     <div style={{ fontSize: 10, letterSpacing: 1, color: "#aaa", textTransform: "uppercase", marginBottom: 8 }}>Fahrzeug</div>
                     <div style={{ display: "flex", gap: 8 }}>
                       {AUTOS.map(a => (
-                        <button key={a} onClick={() => setForm(f => ({ ...f, auto: f.auto === a ? "" : a }))}
-                          style={{ flex: 1, padding: "10px 4px", borderRadius: 8, border: form.auto === a ? "2px solid #1a1a2e" : "2px solid #ddd", background: form.auto === a ? "#1a1a2e" : "#fff", color: form.auto === a ? "#fff" : "#444", fontFamily: "inherit", fontSize: 13, fontWeight: "bold", cursor: "pointer", transition: "all 0.15s", WebkitTapHighlightColor: "transparent" }}>
+                        <button key={a} onClick={() => setForm(f => ({ ...f, autos: f.autos.includes(a) ? f.autos.filter(x => x !== a) : [...f.autos, a] }))}
+                          style={{ flex: 1, padding: "10px 4px", borderRadius: 8, border: form.autos.includes(a) ? "2px solid #1a1a2e" : "2px solid #ddd", background: form.autos.includes(a) ? "#1a1a2e" : "#fff", color: form.autos.includes(a) ? "#fff" : "#444", fontFamily: "inherit", fontSize: 13, fontWeight: "bold", cursor: "pointer", transition: "all 0.15s", WebkitTapHighlightColor: "transparent" }}>
                           {a}
                         </button>
                       ))}
