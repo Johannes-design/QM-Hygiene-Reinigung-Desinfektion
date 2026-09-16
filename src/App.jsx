@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { db } from "./firebase";
+import { db, auth } from "./firebase";
+import { signInWithEmailAndPassword, onAuthStateChanged, signOut } from "firebase/auth";
 import {
   collection,
   addDoc,
@@ -48,14 +49,14 @@ function emptyForm() {
     checks:   { trage_desinfiziert: false, auto_gereinigt: false, kuehlraum_desinfiziert: false, hygieneraum_desinfiziert: false },
     autos:    [],
     temperatur: "4.5",
-    kuerzel:  "",
+    kuerzel:  (typeof localStorage !== "undefined" && localStorage.getItem("kuerzel")) || "",
     bemerkung: "",
   };
 }
 
 // ─── App ─────────────────────────────────────────────────────────────────────
 
-export default function App() {
+function Kuehlraumbuch({ onLogout }) {
   const [view,       setView]       = useState("form");   // "form" | "history" | "print"
   const [form,       setForm]       = useState(emptyForm());
   const [eintraege,  setEintraege]  = useState([]);
@@ -84,18 +85,20 @@ export default function App() {
     setLoading(false);
   }
 
-  async function saveEintrag() {
-    if (!form.temperatur || !form.kuerzel) {
+  async function saveEintrag(vorgaben) {
+    const daten = { ...form, ...(vorgaben || {}) };
+    if (!daten.temperatur || !daten.kuerzel) {
       alert("Bitte Temperatur und Kürzel eintragen.");
       return;
     }
     setSaving(true);
     try {
+      try { localStorage.setItem("kuerzel", daten.kuerzel); } catch (e) {}
       const docRef = await addDoc(collection(db, "eintraege"), {
-        ...form,
+        ...daten,
         createdAt: serverTimestamp(),
       });
-      const neuerEintrag = { id: docRef.id, ...form };
+      const neuerEintrag = { id: docRef.id, ...daten };
       setEintraege(prev => [neuerEintrag, ...prev]);
       setSaved(true);
       setTimeout(() => { setSaved(false); setForm(emptyForm()); }, 1500);
@@ -103,6 +106,16 @@ export default function App() {
       alert("Fehler beim Speichern: " + e.message);
     }
     setSaving(false);
+  }
+
+  // Schnell-Eintrag: alles erledigt, Temperatur wie eingestellt, Kuerzel gemerkt (ein Tipp)
+  function schnellEintrag() {
+    const k = form.kuerzel || (typeof localStorage !== "undefined" && localStorage.getItem("kuerzel")) || "";
+    if (!k) { alert("Bitte einmal unten das Kürzel wählen - danach merkt die App es sich."); return; }
+    saveEintrag({
+      kuerzel: k,
+      checks: { trage_desinfiziert: true, auto_gereinigt: true, kuehlraum_desinfiziert: true, hygieneraum_desinfiziert: true },
+    });
   }
 
   function handleCheck(id) {
@@ -439,6 +452,15 @@ export default function App() {
           </div>
         </div>
 
+        {/* Schnell-Eintrag */}
+        <button onClick={schnellEintrag} disabled={saving}
+          style={{ padding: "16px", background: "#2e7d32", color: "#fff", border: "none", borderRadius: 10, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", fontSize: 15, fontWeight: "bold", letterSpacing: 1, marginTop: 4 }}>
+          ✓ Alles erledigt – Schnell-Eintrag ({parseFloat(form.temperatur).toFixed(1)} °C)
+        </button>
+        <div style={{ fontSize: 11, color: "#aaa", textAlign: "center", marginTop: -6 }}>
+          setzt alle vier Haken, übernimmt Temperatur und Kürzel
+        </div>
+
         {/* Speichern */}
         <button onClick={saveEintrag} disabled={saving}
           style={{ padding: "16px", background: saved ? "#2e7d32" : saving ? "#555" : "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", fontSize: 15, fontWeight: "bold", letterSpacing: 1, transition: "background 0.3s", marginTop: 4 }}>
@@ -449,7 +471,59 @@ export default function App() {
           style={{ padding: "12px", background: "transparent", color: "#888", border: "1px solid #ddd", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>
           Alle Einträge ansehen ({eintraege.length})
         </button>
+
+        <button onClick={onLogout}
+          style={{ padding: "10px", background: "transparent", color: "#bbb", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>
+          Abmelden
+        </button>
       </div>
     </div>
   );
+}
+
+// ─── Anmeldung (seit 16.09.2026) ─────────────────────────────────────────────
+// Ohne Anmeldung kommt niemand mehr an die Eintraege. Zugang: dieselbe
+// E-Mail/Passwort-Kombination wie beim Ueberfuehrungsbuch.
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [passwort, setPasswort] = useState("");
+  const [fehler, setFehler] = useState("");
+
+  useEffect(() => onAuthStateChanged(auth, (u) => { setUser(u); setAuthLoading(false); }), []);
+
+  async function anmelden() {
+    setFehler("");
+    try { await signInWithEmailAndPassword(auth, email.trim(), passwort); }
+    catch (e) { setFehler("Anmeldung fehlgeschlagen. E-Mail und Passwort prüfen."); }
+  }
+
+  if (authLoading) {
+    return <div style={{ fontFamily: "'Courier New', monospace", padding: 48, textAlign: "center", color: "#888" }}>Laden…</div>;
+  }
+
+  if (!user) {
+    return (
+      <div style={{ fontFamily: "'DM Mono', 'Courier New', monospace", background: "#f4f5f0", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+        <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e0e0d8", padding: 24, width: "100%", maxWidth: 360 }}>
+          <div style={{ fontSize: 11, letterSpacing: 3, color: "#888", textTransform: "uppercase" }}>Bestattungshaus Kallwaß</div>
+          <div style={{ fontSize: 20, fontWeight: "bold", color: "#1a1a2e", margin: "4px 0 18px" }}>Kühlraum-Kontrollbuch</div>
+          <input type="email" inputMode="email" autoCapitalize="none" value={email} onChange={e => setEmail(e.target.value)}
+            placeholder="E-Mail"
+            style={{ width: "100%", padding: "12px 14px", fontSize: 16, border: "2px solid #e0e0d8", borderRadius: 10, outline: "none", fontFamily: "inherit", boxSizing: "border-box", marginBottom: 10 }} />
+          <input type="password" value={passwort} onChange={e => setPasswort(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter") anmelden(); }} placeholder="Passwort"
+            style={{ width: "100%", padding: "12px 14px", fontSize: 16, border: `2px solid ${fehler ? "#dc2626" : "#e0e0d8"}`, borderRadius: 10, outline: "none", fontFamily: "inherit", boxSizing: "border-box" }} />
+          {fehler && <div style={{ color: "#dc2626", fontSize: 13, marginTop: 8, fontWeight: "bold" }}>{fehler}</div>}
+          <button onClick={anmelden}
+            style={{ width: "100%", marginTop: 16, padding: "12px 0", fontSize: 15, fontWeight: "bold", background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, cursor: "pointer", fontFamily: "inherit" }}>
+            Anmelden
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return <Kuehlraumbuch onLogout={() => signOut(auth)} />;
 }
