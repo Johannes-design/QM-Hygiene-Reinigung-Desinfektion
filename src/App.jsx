@@ -37,9 +37,27 @@ function formatDate(dateStr) {
   return `${d}.${m}.${y}`;
 }
 
-function today()   { return new Date().toISOString().slice(0, 10); }
+// Lokales Datum (toISOString waere UTC und laege nachts bis 2 Uhr einen Tag zurueck)
+function isoDatum(d) { return d.toLocaleDateString("sv-SE"); }
+function today()   { return isoDatum(new Date()); }
 function nowTime() {
   return new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Nachtraege (seit 26.10.2026): echte Werte fuer vergangene Tage, offen gekennzeichnet.
+// Uhrzeit-Feld traegt "Nachtrag", damit es in jeder Ansicht und im PDF sichtbar ist;
+// wann nachgetragen wurde, steht in nachgetragenAm und in der Bemerkung.
+const NACHTRAG_TAGE = 14;
+function nachtragGrenze() { const d = new Date(); d.setDate(d.getDate() - NACHTRAG_TAGE); return isoDatum(d); }
+function zeitText(e) { return e.nachtrag ? "Nachtrag" : `${e.uhrzeit} Uhr`; }
+function nachtragFelder(bemerkung) {
+  const am = new Date().toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).replace(",", "");
+  return {
+    uhrzeit: "Nachtrag",
+    nachtrag: true,
+    nachgetragenAm: am,
+    bemerkung: [`Nachtrag vom ${am}`, (bemerkung || "").trim()].filter(Boolean).join(" · "),
+  };
 }
 
 function emptyForm() {
@@ -64,6 +82,7 @@ function Kuehlraumbuch({ onLogout }) {
   const [saving,     setSaving]     = useState(false);
   const [saved,      setSaved]      = useState(false);
   const [printEntry, setPrintEntry] = useState(null);
+  const [nachtrag,   setNachtrag]   = useState(null);   // { datum, temperatur, checks, kuerzel, bemerkung } in der Luecken-Tabelle
   const [exportMonat, setExportMonat] = useState(() => {
     const n = new Date();
     return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
@@ -86,10 +105,15 @@ function Kuehlraumbuch({ onLogout }) {
   }
 
   async function saveEintrag(vorgaben) {
-    const daten = { ...form, ...(vorgaben || {}) };
+    let daten = { ...form, ...(vorgaben || {}) };
     if (!daten.temperatur || !daten.kuerzel) {
       alert("Bitte Temperatur und Kürzel eintragen.");
       return;
+    }
+    if (daten.datum > today()) { alert("Einträge für die Zukunft gehen nicht."); return; }
+    if (daten.datum < today()) {
+      if (daten.datum < nachtragGrenze()) { alert(`Nachtragen geht nur für die letzten ${NACHTRAG_TAGE} Tage.`); return; }
+      if (!daten.nachtrag) daten = { ...daten, ...nachtragFelder(daten.bemerkung) };
     }
     setSaving(true);
     try {
@@ -102,20 +126,60 @@ function Kuehlraumbuch({ onLogout }) {
       setEintraege(prev => [neuerEintrag, ...prev]);
       setSaved(true);
       setTimeout(() => { setSaved(false); setForm(emptyForm()); }, 1500);
+      setSaving(false);
+      return true;
     } catch (e) {
       alert("Fehler beim Speichern: " + e.message);
     }
     setSaving(false);
+    return false;
   }
 
   // Schnell-Eintrag: alles erledigt, Temperatur wie eingestellt, Kuerzel gemerkt (ein Tipp)
   function schnellEintrag() {
     const k = form.kuerzel || (typeof localStorage !== "undefined" && localStorage.getItem("kuerzel")) || "";
     if (!k) { alert("Bitte einmal unten das Kürzel wählen - danach merkt die App es sich."); return; }
+    if (form.datum !== today()) { alert("Schnell-Eintrag nur für heute. Vergangene Tage bitte unter „Lücken nachtragen“ mit den echten Werten."); return; }
     saveEintrag({
       kuerzel: k,
       checks: { trage_desinfiziert: true, auto_gereinigt: true, kuehlraum_desinfiziert: true, hygieneraum_desinfiziert: true },
     });
+  }
+
+  // Tabelle der letzten Tage (gestern zuerst) mit ihren Eintraegen
+  function lueckenTage() {
+    const tage = [];
+    for (let i = 1; i <= NACHTRAG_TAGE; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const datum = isoDatum(d);
+      tage.push({
+        datum,
+        wochentag: d.toLocaleDateString("de-DE", { weekday: "short" }),
+        eintraege: eintraege.filter(e => e.datum === datum),
+      });
+    }
+    return tage;
+  }
+
+  function nachtragOeffnen(datum) {
+    const k = (typeof localStorage !== "undefined" && localStorage.getItem("kuerzel")) || "";
+    // Temperatur bewusst leer: kein Vorgabewert bei Nachtraegen
+    setNachtrag({ datum, temperatur: "", checks: { trage_desinfiziert: false, auto_gereinigt: false, kuehlraum_desinfiziert: false, hygieneraum_desinfiziert: false }, kuerzel: k, bemerkung: "" });
+  }
+
+  async function nachtragSpeichern() {
+    const t = parseFloat(String(nachtrag.temperatur).replace(",", "."));
+    if (!Number.isFinite(t) || t < -30 || t > 30) { alert("Bitte die gemessene Temperatur eintragen."); return; }
+    if (!nachtrag.kuerzel) { alert("Bitte Kürzel wählen."); return; }
+    const ok = await saveEintrag({
+      datum: nachtrag.datum,
+      temperatur: t.toFixed(1),
+      checks: nachtrag.checks,
+      autos: [],
+      kuerzel: nachtrag.kuerzel,
+      ...nachtragFelder(nachtrag.bemerkung),
+    });
+    if (ok) setNachtrag(null);
   }
 
   function handleCheck(id) {
@@ -193,7 +257,7 @@ function Kuehlraumbuch({ onLogout }) {
         <div class="eintrag-header">
           <div>
             <span class="eintrag-datum">\${formatDate(e.datum)}</span>
-            <span class="eintrag-meta" style="margin-left:12px;">\${e.uhrzeit} Uhr</span>
+            <span class="eintrag-meta" style="margin-left:12px;">\${zeitText(e)}</span>
             \${fahrzeug ? \`<span class="fahrzeug" style="margin-left:10px;">\${fahrzeug}</span>\` : ''}
           </div>
           <span class="eintrag-temp \${tHigh ? 'temp-warn' : 'temp-ok'}">\${e.temperatur} °C\${tHigh ? ' ⚠' : ''}</span>
@@ -256,7 +320,7 @@ function Kuehlraumbuch({ onLogout }) {
         <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 20, fontSize: 14 }}>
           <tbody>
             <tr><td style={{ padding: "6px 0", fontWeight: "bold", width: "45%" }}>Datum</td><td>{formatDate(printEntry.datum)}</td></tr>
-            <tr><td style={{ padding: "6px 0", fontWeight: "bold" }}>Uhrzeit</td><td>{printEntry.uhrzeit} Uhr</td></tr>
+            <tr><td style={{ padding: "6px 0", fontWeight: "bold" }}>Uhrzeit</td><td>{zeitText(printEntry)}{printEntry.nachtrag && printEntry.nachgetragenAm ? ` (eingetragen am ${printEntry.nachgetragenAm})` : ""}</td></tr>
             <tr>
               <td style={{ padding: "6px 0", fontWeight: "bold" }}>Temperatur</td>
               <td style={{ color: pTempHigh ? "red" : "inherit", fontWeight: pTempHigh ? "bold" : "normal" }}>
@@ -289,6 +353,88 @@ function Kuehlraumbuch({ onLogout }) {
         <div style={{ display: "flex", gap: 12, marginTop: 24 }}>
           <button onClick={() => window.print()} style={{ padding: "10px 20px", background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>🖨 Drucken / PDF</button>
           <button onClick={() => setView("history")} style={{ padding: "10px 20px", background: "#eee", color: "#333", border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>← Zurück</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LUECKEN VIEW (Nachtragen als Tabelle) ──────────────────────────────────
+  if (view === "luecken") {
+    const tage = lueckenTage();
+    const offen = tage.filter(t => !t.eintraege.length).length;
+    const zelle = { padding: "10px 8px", borderBottom: "1px solid #eee", fontSize: 13, verticalAlign: "top" };
+    return (
+      <div style={{ fontFamily: "'DM Mono', 'Courier New', monospace", maxWidth: 640, margin: "0 auto", padding: "24px 16px", background: "#f4f5f0", minHeight: "100vh" }}>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap'); * { box-sizing: border-box; }`}</style>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <div>
+            <div style={{ fontSize: 11, letterSpacing: 3, color: "#888", textTransform: "uppercase" }}>Bestattungshaus Kallwaß</div>
+            <div style={{ fontSize: 22, fontWeight: "bold", color: "#1a1a2e", marginTop: 2 }}>Lücken nachtragen</div>
+          </div>
+          <button onClick={() => { setNachtrag(null); setView("form"); }} style={{ padding: "8px 16px", background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit", fontSize: 12 }}>← Zurück</button>
+        </div>
+        <div style={{ fontSize: 12, color: "#777", marginBottom: 16 }}>
+          Letzte {NACHTRAG_TAGE} Tage · {offen === 0 ? "keine Lücke" : `${offen} Tag${offen !== 1 ? "e" : ""} ohne Eintrag`}. Nur echte Werte eintragen – der Eintrag wird als Nachtrag gekennzeichnet.
+        </div>
+        <div style={{ ...s.card, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <tbody>
+              {tage.map(t => {
+                const aktiv = nachtrag && nachtrag.datum === t.datum;
+                return (
+                  <tr key={t.datum} style={{ background: t.eintraege.length ? "#fff" : "#fff8e1" }}>
+                    <td style={{ ...zelle, width: 110, fontWeight: "bold", color: "#1a1a2e", whiteSpace: "nowrap" }}>
+                      {t.wochentag} {formatDate(t.datum).slice(0, 6)}
+                    </td>
+                    <td style={zelle}>
+                      {t.eintraege.length > 0 ? (
+                        t.eintraege.map(e => (
+                          <div key={e.id} style={{ color: "#2e7d32" }}>
+                            ✓ {e.temperatur} °C · {e.kuerzel}{e.nachtrag ? <span style={{ color: "#b26a00" }}> · Nachtrag</span> : ""}
+                          </div>
+                        ))
+                      ) : aktiv ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <input type="text" inputMode="decimal" autoFocus value={nachtrag.temperatur} placeholder="Temperatur °C"
+                            onChange={ev => setNachtrag(n => ({ ...n, temperatur: ev.target.value }))}
+                            style={{ padding: "10px 12px", fontSize: 16, border: "2px solid #e0e0d8", borderRadius: 8, fontFamily: "inherit", width: "100%" }} />
+                          {CHECKS.map(c => (
+                            <label key={c.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, cursor: "pointer" }}>
+                              <input type="checkbox" checked={nachtrag.checks[c.id]} onChange={() => setNachtrag(n => ({ ...n, checks: { ...n.checks, [c.id]: !n.checks[c.id] } }))} />
+                              {c.label}
+                            </label>
+                          ))}
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            {KUERZEL.map(k => (
+                              <button key={k} onClick={() => setNachtrag(n => ({ ...n, kuerzel: k }))} style={{ ...s.btn(nachtrag.kuerzel === k), padding: "6px 10px", fontSize: 12 }}>{k}</button>
+                            ))}
+                          </div>
+                          <input type="text" value={nachtrag.bemerkung} placeholder="Bemerkung (optional)"
+                            onChange={ev => setNachtrag(n => ({ ...n, bemerkung: ev.target.value }))}
+                            style={{ padding: "8px 12px", fontSize: 13, border: "1px solid #e0e0d8", borderRadius: 8, fontFamily: "inherit", width: "100%" }} />
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button onClick={nachtragSpeichern} disabled={saving}
+                              style={{ flex: 1, padding: "10px", background: "#1a1a2e", color: "#fff", border: "none", borderRadius: 8, fontFamily: "inherit", fontSize: 13, fontWeight: "bold", cursor: "pointer" }}>
+                              {saving ? "Speichert…" : "Nachtragen"}
+                            </button>
+                            <button onClick={() => setNachtrag(null)}
+                              style={{ padding: "10px 14px", background: "#eee", color: "#333", border: "none", borderRadius: 8, fontFamily: "inherit", fontSize: 13, cursor: "pointer" }}>
+                              Abbrechen
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button onClick={() => nachtragOeffnen(t.datum)}
+                          style={{ padding: "6px 12px", background: "#fff", color: "#b26a00", border: "1px solid #f0c36d", borderRadius: 6, fontFamily: "inherit", fontSize: 12, cursor: "pointer" }}>
+                          — fehlt · nachtragen
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     );
@@ -345,7 +491,7 @@ function Kuehlraumbuch({ onLogout }) {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 14, fontWeight: "bold", color: "#1a1a2e" }}>{formatDate(e.datum)}</span>
-                      <span style={{ fontSize: 12, color: "#999" }}>{e.uhrzeit} Uhr</span>
+                      <span style={{ fontSize: 12, color: e.nachtrag ? "#b26a00" : "#999" }}>{zeitText(e)}</span>
                       {(e.autos && e.autos.length > 0 ? e.autos : e.auto ? [e.auto] : []).map(a => <span key={a} style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: "#e8eaf6", color: "#3949ab", fontWeight: "bold" }}>{ a }</span>)}
                       <span style={{ fontSize: 12, padding: "1px 7px", borderRadius: 999, background: allOk ? "#e8f5e9" : "#fce4ec", color: allOk ? "#2e7d32" : "#c62828", fontWeight: "bold" }}>
                         {allOk ? "✓ OK" : "⚠ Unvollständig"}
@@ -374,7 +520,7 @@ function Kuehlraumbuch({ onLogout }) {
       <div style={{ background: "#1a1a2e", color: "#fff", padding: "20px 20px 16px" }}>
         <div style={{ fontSize: 10, letterSpacing: 3, color: "#8888aa", textTransform: "uppercase" }}>Bestattungshaus Kallwaß</div>
         <div style={{ fontSize: 20, fontWeight: "bold", marginTop: 2 }}>Kühlraum-Kontrolle</div>
-        <div style={{ fontSize: 12, color: "#8888aa", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}><input type="date" value={form.datum} onChange={e => setForm(f => ({ ...f, datum: e.target.value }))} style={{ background: "transparent", border: "none", borderBottom: "1px solid #555577", color: "#aaaacc", fontFamily: "inherit", fontSize: 12, outline: "none", cursor: "pointer", padding: "1px 0", colorScheme: "dark" }} /><span style={{ color: "#8888aa" }}>· {form.uhrzeit} Uhr</span></div>
+        <div style={{ fontSize: 12, color: "#8888aa", marginTop: 6, display: "flex", alignItems: "center", gap: 6 }}><input type="date" value={form.datum} min={nachtragGrenze()} max={today()} onChange={e => setForm(f => ({ ...f, datum: e.target.value }))} style={{ background: "transparent", border: "none", borderBottom: "1px solid #555577", color: "#aaaacc", fontFamily: "inherit", fontSize: 12, outline: "none", cursor: "pointer", padding: "1px 0", colorScheme: "dark" }} /><span style={{ color: "#8888aa" }}>· {form.uhrzeit} Uhr</span></div>
       </div>
 
       <div style={{ padding: "20px 16px", display: "flex", flexDirection: "column", gap: 20 }}>
@@ -462,10 +608,20 @@ function Kuehlraumbuch({ onLogout }) {
         </div>
 
         {/* Speichern */}
-        <button onClick={saveEintrag} disabled={saving}
+        <button onClick={() => saveEintrag()} disabled={saving}
           style={{ padding: "16px", background: saved ? "#2e7d32" : saving ? "#555" : "#1a1a2e", color: "#fff", border: "none", borderRadius: 10, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit", fontSize: 15, fontWeight: "bold", letterSpacing: 1, transition: "background 0.3s", marginTop: 4 }}>
           {saved ? "✓ Gespeichert!" : saving ? "Wird gespeichert…" : "Eintrag speichern"}
         </button>
+
+        {(() => {
+          const offen = lueckenTage().filter(t => !t.eintraege.length).length;
+          return (
+            <button onClick={() => setView("luecken")}
+              style={{ padding: "12px", background: offen ? "#fff8e1" : "transparent", color: offen ? "#b26a00" : "#888", border: `1px solid ${offen ? "#f0c36d" : "#ddd"}`, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: offen ? "bold" : "normal" }}>
+              {loading ? "Lücken nachtragen" : offen ? `Lücken nachtragen (${offen} Tag${offen !== 1 ? "e" : ""} offen)` : "Lücken nachtragen – letzte 14 Tage vollständig"}
+            </button>
+          );
+        })()}
 
         <button onClick={() => setView("history")}
           style={{ padding: "12px", background: "transparent", color: "#888", border: "1px solid #ddd", borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontSize: 13 }}>
